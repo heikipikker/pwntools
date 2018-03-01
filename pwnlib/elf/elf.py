@@ -183,6 +183,7 @@ class ELF(ELFFile):
     functions = {}
     endian = 'little'
     address = 0x400000
+    linker = None
 
     # Whether to fill gaps in memory with zeroed pages
     _fill_gaps = True
@@ -262,9 +263,13 @@ class ELF(ELFFile):
                 self.bits = 64
 
         # Is this a native binary? Should we be checking QEMU?
-        with context.local(arch=self.arch):
-            #: Whether this ELF should be able to run natively
-            self.native = context.native
+        try:
+            with context.local(arch=self.arch):
+                #: Whether this ELF should be able to run natively
+                self.native = context.native
+        except AttributeError:
+            # The architecture may not be supported in pwntools
+            self.native = False
 
         self._address = 0
         if self.elftype != 'DYN':
@@ -304,7 +309,19 @@ class ELF(ELFFile):
 
         for seg in self.iter_segments_by_type('PT_INTERP'):
             self.executable = True
+
+            #: ``True`` if the ELF is statically linked
             self.statically_linked = False
+
+            #: Path to the linker for the ELF
+            self.linker = self.read(seg.header.p_vaddr, seg.header.p_memsz)
+            self.linker = self.linker.rstrip('\x00')
+
+        #: Operating system of the ELF
+        self.os = 'linux'
+
+        if self.linker and self.linker.startswith('/system/bin/linker'):
+            self.os = 'android'
 
         #: ``True`` if the ELF is a shared library
         self.library = not self.executable and self.elftype == 'DYN'
@@ -1505,7 +1522,7 @@ class ELF(ELFFile):
         if not dt_runpath:
             return None
 
-        return self.dynamic_string(dt_rpath.entry.d_ptr)
+        return self.dynamic_string(dt_runpath.entry.d_ptr)
 
     def checksec(self, banner=True, color=True):
         """checksec(banner=True)
